@@ -680,7 +680,12 @@
         if (k === 37) { e.preventDefault(); moveFocus(-1, 0); }
         else if (k === 39) { e.preventDefault(); moveFocus(1, 0); }
         else if (k === 38 || k === 40) { e.preventDefault(); }
-        return;                                    // Enter clicks the focused button
+        else if (k === 13 || k === 32) {            // OK / Select: click the focused button
+          e.preventDefault();
+          var focused = document.activeElement;
+          if (focused && focused.tagName === 'BUTTON') { focused.click(); }
+        }
+        return;
       }
       // next slide: → Enter Space PageDown Fast-forward
       if (k === 39 || k === 13 || k === 32 || k === 34 || k === 417) { e.preventDefault(); nextSlide(); }
@@ -697,6 +702,10 @@
     else if (k === 39) { e.preventDefault(); moveFocus(1, 0); }
     else if (k === 38) { e.preventDefault(); moveFocus(0, -1); }
     else if (k === 40) { e.preventDefault(); moveFocus(0, 1); }
+    else if (k === 13 || k === 32) {                // OK / Select: click the focused button
+      var focused = document.activeElement;
+      if (focused && focused.tagName === 'BUTTON') { e.preventDefault(); focused.click(); }
+    }
   });
 
   // Magic Remote pointer: show controls on move, tap left/right side of the card to go back/forward
