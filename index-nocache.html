@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="theme-color" content="#000000">
+<title>Flashcards</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: #000;
+    color: #fff;
+    overflow: hidden;
+    font-family: "LG Smart UI", "Helvetica Neue", Arial, sans-serif;
+  }
+  button {
+    font-family: inherit;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+    outline: none;
+  }
+  .screen {
+    display: none;
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    box-sizing: border-box;
+    padding: 5vh 5vw;              /* keeps content inside TV overscan */
+    overflow-y: auto;
+  }
+  .screen.active { display: block; }
+
+  h1 {
+    margin: 0 0 4vh 0;
+    font-size: 4.6vw;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+
+  /* Buttons: dark at rest, solid white when focused */
+  .btn {
+    box-sizing: border-box;
+    background: #000;
+    color: #fff;
+    border: 0.25vw solid #555;
+    border-radius: 1vw;
+    -webkit-transition: -webkit-transform 0.12s;
+    transition: transform 0.12s;
+  }
+  .btn:focus, .btn:hover {
+    background: #fff;
+    color: #000;
+    border-color: #fff;
+    -webkit-transform: scale(1.06);
+    transform: scale(1.06);
+  }
+
+  /* Topic menu */
+  #menu { text-align: center; padding-top: 12vh; }
+  #menu h1 { margin-bottom: 8vh; }
+  .topic {
+    display: inline-block;
+    vertical-align: top;
+    width: 40vw;
+    margin: 0 1.5vw 3vh 1.5vw;
+    padding: 6vh 2vw;
+    font-size: 3.4vw;
+    font-weight: 700;
+  }
+  .topic small {
+    display: block;
+    margin-top: 1.5vh;
+    font-size: 1.8vw;
+    font-weight: 400;
+    opacity: 0.7;
+  }
+  #menuNote { margin-top: 5vh; font-size: 1.6vw; color: #aaa; min-height: 2vw; }
+
+  /* Set picker */
+  .bar { margin-bottom: 3vh; }
+  .bar .btn {
+    display: inline-block;
+    vertical-align: middle;
+    padding: 1.4vh 2vw;
+    margin-right: 2.5vw;
+    font-size: 2vw;
+  }
+  .bar h1 { display: inline-block; vertical-align: middle; margin: 0; font-size: 3.6vw; }
+  #setList { padding: 1.5vh 0.5vw 4vh 0.5vw; }
+  .setbtn {
+    display: inline-block;
+    width: 8.4vw;
+    margin: 0 0.5vw 1.6vh 0.5vw;
+    padding: 2.6vh 0;
+    font-size: 2.8vw;
+    font-weight: 700;
+    text-align: center;
+  }
+
+  /* Viewer */
+  #viewer { padding: 0; overflow: hidden; background: #000; }
+  #slide {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    object-fit: contain;
+    background: #000;
+    display: none;
+  }
+  #msg {
+    position: absolute;
+    top: 50%; left: 0; right: 0;
+    margin-top: -2vw;
+    text-align: center;
+    font-size: 2.6vw;
+    color: #ccc;
+  }
+  #hudTop {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    padding: 3vh 4vw 6vh 4vw;
+    background: -webkit-linear-gradient(top, rgba(0,0,0,0.85), rgba(0,0,0,0));
+    background: linear-gradient(to bottom, rgba(0,0,0,0.85), rgba(0,0,0,0));
+    font-size: 2.2vw;
+    -webkit-transition: opacity 0.3s;
+    transition: opacity 0.3s;
+  }
+  #hudTop .btn {
+    display: inline-block;
+    padding: 1vh 1.6vw;
+    margin-right: 2vw;
+    font-size: 1.8vw;
+    background: rgba(0,0,0,0.6);
+  }
+  #hudTop .btn:hover { background: #fff; }
+  #hudTitle { font-weight: 700; }
+  #hudCount { float: right; margin-top: 0.6vh; font-size: 2vw; color: #ddd; }
+  .side {
+    position: absolute;
+    top: 38%;
+    width: 6vw; height: 24vh;
+    font-size: 4vw;
+    background: rgba(0,0,0,0.55);
+    -webkit-transition: opacity 0.3s;
+    transition: opacity 0.3s;
+  }
+  #prevBtn { left: 1.5vw; }
+  #nextBtn { right: 1.5vw; }
+  #barTrack { position: absolute; left: 0; right: 0; bottom: 0; height: 0.7vh; background: #222; }
+  #barFill { height: 100%; width: 0; background: #fff; -webkit-transition: width 0.25s; transition: width 0.25s; }
+  #viewer.hud-hidden #hudTop,
+  #viewer.hud-hidden .side { opacity: 0; pointer-events: none; }
+  #viewer.hud-hidden { cursor: none; }
+
+  /* End-of-set panel */
+  #end {
+    display: none;
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.92);
+    text-align: center;
+    padding-top: 22vh;
+  }
+  #end h2 { margin: 0 0 6vh 0; font-size: 4vw; }
+  #end .btn {
+    display: inline-block;
+    margin: 0 1vw 2vh 1vw;
+    padding: 3vh 2.4vw;
+    font-size: 2.4vw;
+    font-weight: 700;
+  }
+
+  /* Rotate hint: only on touch devices held in portrait */
+  #rotateHint {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 100;
+    padding: 1.2vh 4vw;
+    background: #fff;
+    color: #000;
+    text-align: center;
+    font-size: 4vw;
+    font-weight: 700;
+    pointer-events: none;
+  }
+  @media (orientation: portrait) and (hover: none) and (pointer: coarse) {
+    #rotateHint { display: block; }
+  }
+</style>
+</head>
+<body>
+<div id="rotateHint">Rotate your device to landscape ↻</div>
+
+
+<section id="menu" class="screen">
+  <h1>Flashcards</h1>
+  <div id="menuList"></div>
+  <div id="menuNote">Loading flashcard sets…</div>
+</section>
+
+<section id="sets" class="screen">
+  <div class="bar">
+    <button class="btn" id="setsBack" type="button">◀ Topics</button>
+    <h1 id="setsTitle"></h1>
+  </div>
+  <div id="setList"></div>
+</section>
+
+<section id="viewer" class="screen">
+  <img id="slide" alt="">
+  <div id="msg"></div>
+  <div id="hudTop">
+    <button class="btn" id="viewBack" type="button" tabindex="-1">◀ Sets</button>
+    <span id="hudTitle"></span>
+    <span id="hudCount"></span>
+  </div>
+  <button class="btn side" id="prevBtn" type="button" tabindex="-1">‹</button>
+  <button class="btn side" id="nextBtn" type="button" tabindex="-1">›</button>
+  <div id="barTrack"><div id="barFill"></div></div>
+
+  <div id="end">
+    <h2 id="endTitle"></h2>
+    <button class="btn" id="endLast" type="button">◀ Last slide</button>
+    <button class="btn" id="endReplay" type="button">↺ Replay</button>
+    <button class="btn" id="endNext" type="button">Next set ▶</button>
+    <button class="btn" id="endSets" type="button">All sets</button>
+  </div>
+</section>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ---------------- Configuration ---------------- */
+  var SHEET_ID = '1QbkHWwNKvzqsaII3MGdZfrBVeJCj9fDs19thrqtxskU';
+  // Name of the tab that lists your topic tabs (one tab name per row in column A).
+  // Must match the tab's name exactly.
+  var INDEX_TAB = 'index';
+  // Used only if the index tab is missing or empty. One entry per tab in the spreadsheet.
+  var TOPICS = ['addition-of-integers', 'subtraction-of-integers'];
+  // Used only if the Google Sheet cannot be reached.
+  var FALLBACK = { owner: 'cityofsmiles', repo: 'flashcards4tv7', branch: 'main', sets: 50 };
+  var SLIDE_PREFIX = 'slide-';
+  var SLIDE_EXT = '.png';
+  var MAX_SLIDES = 200;
+
+  /* ---------------- Helpers ---------------- */
+  function $(id) { return document.getElementById(id); }
+  function pad(n) { n = String(n); return n.length < 2 ? '0' + n : n; }
+  function pretty(id) {
+    var small = { of: 1, and: 1, the: 1, in: 1, to: 1, a: 1, for: 1 };
+    var words = id.replace(/[-_]+/g, ' ').split(' ');
+    var out = [];
+    for (var i = 0; i < words.length; i++) {
+      var w = words[i];
+      if (i > 0 && small[w.toLowerCase()]) { out.push(w.toLowerCase()); }
+      else { out.push(w.charAt(0).toUpperCase() + w.slice(1)); }
+    }
+    return out.join(' ');
+  }
+  function folderToBase(u) {
+    u = String(u).replace(/^\s+|\s+$/g, '');
+    var m = u.match(/^https?:\/\/github\.com\/([^\/]+)\/([^\/]+)\/(?:tree|blob)\/([^\/]+)\/(.+?)\/?$/);
+    if (m) { return 'https://raw.githubusercontent.com/' + m[1] + '/' + m[2] + '/' + m[3] + '/' + m[4]; }
+    return u.replace(/\/+$/, '');
+  }
+  function store(key, val) { try { localStorage.setItem(key, val); } catch (e) {} }
+  function recall(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+
+  /* ---------------- Data ---------------- */
+  var topics = [];      // [{id, title, sets:[{num, base}], fromSheet}]
+  var jsonpCount = 0;
+
+  function fetchSheet(name, cb, headerRows) {
+    if (headerRows == null) { headerRows = 1; }
+    var cbName = '__gviz' + (++jsonpCount) + '_' + Math.floor(Math.random() * 1000000);
+    var done = false;
+    var s = document.createElement('script');
+    var timer = setTimeout(function () { finish(null); }, 9000);
+    function finish(data) {
+      if (done) { return; }
+      done = true;
+      clearTimeout(timer);
+      try { delete window[cbName]; } catch (e) { window[cbName] = undefined; }
+      if (s.parentNode) { s.parentNode.removeChild(s); }
+      cb(data);
+    }
+    window[cbName] = function (resp) { finish(resp); };
+    s.onerror = function () { finish(null); };
+    s.src = 'https://docs.google.com/spreadsheets/d/' + SHEET_ID +
+      '/gviz/tq?tqx=out:json;responseHandler:' + cbName +
+      '&headers=' + headerRows + '&sheet=' + encodeURIComponent(name);
+    document.head.appendChild(s);
+  }
+
+  function parseSets(resp) {
+    var sets = [];
+    if (!resp || !resp.table || !resp.table.rows) { return sets; }
+    var rows = resp.table.rows;
+    for (var i = 0; i < rows.length; i++) {
+      var c = rows[i].c;
+      if (!c || !c[1] || c[1].v == null) { continue; }
+      var url = String(c[1].v);
+      if (!/^https?:/i.test(url)) { continue; }     // skips a header row if present
+      var num = '';
+      if (c[0]) { num = (c[0].f != null ? c[0].f : c[0].v); }
+      num = (num == null) ? '' : String(num);
+      if (!num) { num = pad(sets.length + 1); }
+      if (/^\d$/.test(num)) { num = '0' + num; }
+      sets.push({ num: num, base: folderToBase(url) });
+    }
+    return sets;
+  }
+
+  function fallbackSets(id) {
+    var sets = [];
+    for (var i = 1; i <= FALLBACK.sets; i++) {
+      sets.push({
+        num: pad(i),
+        base: 'https://raw.githubusercontent.com/' + FALLBACK.owner + '/' + FALLBACK.repo +
+              '/' + FALLBACK.branch + '/' + id + '/' + pad(i)
+      });
+    }
+    return sets;
+  }
+
+  // Reads the index tab: column A holds one tab name per row. A header row
+  // (e.g. "Topics") is optional and is skipped automatically.
+  function parseIndex(resp) {
+    var names = [];
+    if (!resp || !resp.table || !resp.table.rows) { return names; }
+    var rows = resp.table.rows;
+    var headerWords = { tab: 1, tabs: 1, 'tab name': 1, 'tab names': 1, topic: 1, topics: 1,
+                        name: 1, names: 1, sheet: 1, sheets: 1, index: 1 };
+    var seen = {};
+    for (var i = 0; i < rows.length; i++) {
+      var c = rows[i].c;
+      // A slide-set row (URL in column B) means Google returned a topic tab
+      // instead of an index tab, so the index tab doesn't exist.
+      if (c && c[1] && c[1].v != null && /^https?:/i.test(String(c[1].v))) { return []; }
+      if (!c || !c[0] || c[0].v == null) { continue; }
+      var name = String(c[0].v).replace(/^\s+|\s+$/g, '');
+      if (!name) { continue; }
+      var low = name.toLowerCase();
+      if (headerWords[low] || low === INDEX_TAB.toLowerCase()) { continue; }
+      if (seen[low]) { continue; }
+      seen[low] = true;
+      names.push(name);
+    }
+    return names;
+  }
+
+  function loadTopics(ids, fromIndex, done) {
+    var remaining = ids.length;
+    var anyFallback = false;
+    var loaded = new Array(ids.length);
+    ids.forEach(function (id, idx) {
+      fetchSheet(id, function (resp) {
+        var sets = parseSets(resp);
+        var fromSheet = sets.length > 0;
+        if (!fromSheet) {
+          // Only tabs from the built-in list get the GitHub fallback; an unknown
+          // or empty tab from the index is skipped rather than shown broken.
+          if (!fromIndex || TOPICS.indexOf(id) >= 0) {
+            sets = fallbackSets(id);
+            anyFallback = true;
+          } else {
+            sets = null;
+          }
+        }
+        if (sets) { loaded[idx] = { id: id, title: pretty(id), sets: sets, fromSheet: fromSheet }; }
+        remaining--;
+        if (remaining === 0) {
+          topics = loaded.filter(function (t) { return !!t; });
+          done(anyFallback, !fromIndex);
+        }
+      });
+    });
+  }
+
+  function loadAll(done) {
+    fetchSheet(INDEX_TAB, function (resp) {
+      var ids = parseIndex(resp);
+      var fromIndex = ids.length > 0;
+      if (!fromIndex) { ids = TOPICS.slice(); }
+      loadTopics(ids, fromIndex, done);
+    }, 0);
+  }
+
+  function findTopic(id) {
+    for (var i = 0; i < topics.length; i++) { if (topics[i].id === id) { return topics[i]; } }
+    return null;
+  }
+  function findSetIndex(t, num) {
+    for (var i = 0; i < t.sets.length; i++) { if (t.sets[i].num === num) { return i; } }
+    return -1;
+  }
+
+  /* ---------------- Screens ---------------- */
+  var state = { screen: 'menu' };
+  var screens = { menu: $('menu'), sets: $('sets'), viewer: $('viewer') };
+
+  function showScreen(name) {
+    for (var k in screens) { if (screens.hasOwnProperty(k)) { screens[k].className = 'screen' + (k === name ? ' active' : ''); } }
+    state.screen = name;
+    if (name === 'viewer') { $('viewer').className = 'screen active'; }
+  }
+
+  function focusFirst(container, selector) {
+    var el = container.querySelector(selector || 'button');
+    if (el) { el.focus(); }
+  }
+
+  function renderMenu() {
+    var list = $('menuList');
+    list.innerHTML = '';
+    var lastTopic = recall('fc_topic');
+    var focusEl = null;
+    topics.forEach(function (t) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'btn topic';
+      b.innerHTML = '<span></span><small></small>';
+      b.firstChild.textContent = t.title;
+      b.lastChild.textContent = t.sets.length + (t.sets.length === 1 ? ' set' : ' sets');
+      b.onclick = function () { go('#t=' + encodeURIComponent(t.id)); };
+      list.appendChild(b);
+      if (!focusEl || t.id === lastTopic) { focusEl = b; }
+    });
+    showScreen('menu');
+    if (focusEl) { focusEl.focus(); }
+  }
+
+  function renderSets(t) {
+    $('setsTitle').textContent = t.title;
+    var list = $('setList');
+    list.innerHTML = '';
+    var lastSet = (recall('fc_topic') === t.id) ? recall('fc_set') : null;
+    var focusEl = null;
+    t.sets.forEach(function (s) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'btn setbtn';
+      b.textContent = s.num;
+      b.onclick = function () { go('#t=' + encodeURIComponent(t.id) + '&s=' + encodeURIComponent(s.num) + '&i=1'); };
+      list.appendChild(b);
+      if (!focusEl || s.num === lastSet) { focusEl = b; }
+    });
+    showScreen('sets');
+    $('sets').scrollTop = 0;
+    if (focusEl) { focusEl.focus(); }
+  }
+
+  /* ---------------- Viewer ---------------- */
+  var v = null;            // current viewer state
+  var viewerToken = 0;
+  var hudTimer = null;
+
+  function slideUrl(n) { return v.set.base + '/' + SLIDE_PREFIX + pad(n) + SLIDE_EXT; }
+
+  function showHud() {
+    var el = $('viewer');
+    el.className = 'screen active';
+    if (hudTimer) { clearTimeout(hudTimer); }
+    hudTimer = setTimeout(function () {
+      if (state.screen === 'viewer' && !v.endShown) { el.className = 'screen active hud-hidden'; }
+    }, 3500);
+  }
+
+  function updateCount() {
+    if (!v) { return; }
+    var txt = 'Set ' + v.set.num + '  ·  ' + v.i + (v.count != null ? ' / ' + v.count : '');
+    $('hudCount').textContent = txt;
+    $('barFill').style.width = (v.count ? Math.round(v.i / v.count * 100) : 0) + '%';
+  }
+
+  function setMsg(text) { $('msg').textContent = text || ''; }
+
+  function startViewer(t, setIdx, idx) {
+    var set = t.sets[setIdx];
+    v = { t: t, setIdx: setIdx, set: set, i: 0, count: null, req: 0, token: ++viewerToken, imgs: {}, endShown: false };
+    store('fc_topic', t.id);
+    store('fc_set', set.num);
+    $('hudTitle').textContent = t.title;
+    $('slide').style.display = 'none';
+    $('end').style.display = 'none';
+    setMsg('Loading…');
+    $('barFill').style.width = '0';
+    showScreen('viewer');
+    if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); }
+    showHud();
+    v.i = 0;
+    updateCount();
+    probe(1, v.token);
+    showSlide(idx || 1);
+  }
+
+  // Preloads slides one after another and discovers how many there are.
+  function probe(n, token) {
+    if (!v || token !== v.token) { return; }
+    if (n > MAX_SLIDES) { v.count = MAX_SLIDES; updateCount(); return; }
+    var im = new Image();
+    v.imgs[n] = im;
+    im.onload = function () { probe(n + 1, token); };
+    im.onerror = function () {
+      if (!v || token !== v.token) { return; }
+      v.count = n - 1;
+      updateCount();
+    };
+    im.src = slideUrl(n);
+  }
+
+  function showSlide(n) {
+    if (!v) { return; }
+    if (n < 1) { n = 1; }
+    if (v.count != null && n > v.count) { showEnd(); return; }
+    var req = ++v.req;
+    var im = new Image();
+    im.onload = function () {
+      if (!v || req !== v.req) { return; }
+      v.i = n;
+      var el = $('slide');
+      el.src = im.src;
+      el.style.display = 'block';
+      setMsg('');
+      updateCount();
+      hideEnd();
+      replaceHash();
+    };
+    im.onerror = function () {
+      if (!v || req !== v.req) { return; }
+      if (n > 1) { v.count = n - 1; v.i = n - 1; updateCount(); showEnd(); }
+      else { $('slide').style.display = 'none'; setMsg('No slides found for this set'); }
+    };
+    im.src = slideUrl(n);
+  }
+
+  function nextSlide() {
+    if (!v || v.endShown) { return; }
+    if (v.count != null && v.i >= v.count) { showEnd(); return; }
+    showSlide(v.i + 1);
+  }
+  function prevSlide() {
+    if (!v) { return; }
+    if (v.endShown) { hideEnd(); return; }
+    if (v.i > 1) { showSlide(v.i - 1); }
+  }
+
+  function replaceHash() {
+    if (!v) { return; }
+    var h = '#t=' + encodeURIComponent(v.t.id) + '&s=' + encodeURIComponent(v.set.num) + '&i=' + v.i;
+    try { history.replaceState(null, '', h); } catch (e) {}
+  }
+
+  function showEnd() {
+    v.endShown = true;
+    $('endTitle').textContent = v.t.title + ' — Set ' + v.set.num + ' complete';
+    $('endNext').style.display = (v.setIdx + 1 < v.t.sets.length) ? 'inline-block' : 'none';
+    $('end').style.display = 'block';
+    $('viewer').className = 'screen active';
+    if ($('endNext').style.display !== 'none') { $('endNext').focus(); } else { $('endReplay').focus(); }
+  }
+  function hideEnd() {
+    if (!v) { return; }
+    v.endShown = false;
+    $('end').style.display = 'none';
+    if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); }
+    showHud();
+  }
+
+  function openSet(setIdx) {
+    if (!v) { return; }
+    if (setIdx < 0 || setIdx >= v.t.sets.length) { return; }
+    var s = v.t.sets[setIdx];
+    go('#t=' + encodeURIComponent(v.t.id) + '&s=' + encodeURIComponent(s.num) + '&i=1', true);
+  }
+
+  /* ---------------- Routing (hash) ---------------- */
+  function parseHash() {
+    var out = {};
+    var h = (location.hash || '').replace(/^#/, '');
+    if (!h) { return out; }
+    var parts = h.split('&');
+    for (var i = 0; i < parts.length; i++) {
+      var kv = parts[i].split('=');
+      if (kv[0]) { out[kv[0]] = decodeURIComponent(kv[1] || ''); }
+    }
+    return out;
+  }
+
+  function route() {
+    if (!topics.length) { return; }
+    var p = parseHash();
+    var t = p.t ? findTopic(p.t) : null;
+    if (t && p.s) {
+      var si = findSetIndex(t, p.s);
+      if (si >= 0) { startViewer(t, si, parseInt(p.i, 10) || 1); return; }
+    }
+    if (t) { v = null; renderSets(t); return; }
+    v = null;
+    renderMenu();
+  }
+
+  function go(hash, replace) {
+    if (replace) {
+      try { history.replaceState(null, '', hash); } catch (e) { location.hash = hash; }
+      route();
+    } else if (location.hash === hash) {
+      route();
+    } else {
+      location.hash = hash;   // triggers hashchange → route()
+    }
+  }
+
+  function goBack() {
+    if (state.screen === 'menu') { return; }
+    if (history.length > 1) { history.back(); return; }
+    if (state.screen === 'viewer' && v) { go('#t=' + encodeURIComponent(v.t.id), true); }
+    else { go('', true); }
+  }
+
+  window.addEventListener('hashchange', route);
+
+  /* ---------------- Remote control / keyboard ---------------- */
+  function moveFocus(dx, dy) {
+    var scr = screens[state.screen];
+    var root = (state.screen === 'viewer') ? $('end') : scr;
+    var nodes = root.querySelectorAll('button');
+    var cur = document.activeElement;
+    var list = [];
+    for (var i = 0; i < nodes.length; i++) { if (nodes[i].offsetParent !== null) { list.push(nodes[i]); } }
+    if (!list.length) { return; }
+    if (!cur || cur === document.body || !root.contains(cur)) { list[0].focus(); return; }
+    var r = cur.getBoundingClientRect();
+    var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    var best = null, bestScore = 1e9;
+    for (var j = 0; j < list.length; j++) {
+      var b = list[j];
+      if (b === cur) { continue; }
+      var q = b.getBoundingClientRect();
+      var ddx = (q.left + q.width / 2) - cx;
+      var ddy = (q.top + q.height / 2) - cy;
+      if (dx > 0 && ddx <= 2) { continue; }
+      if (dx < 0 && ddx >= -2) { continue; }
+      if (dy > 0 && ddy <= 2) { continue; }
+      if (dy < 0 && ddy >= -2) { continue; }
+      var primary = dx ? Math.abs(ddx) : Math.abs(ddy);
+      var secondary = dx ? Math.abs(ddy) : Math.abs(ddx);
+      var score = primary + secondary * 3;
+      if (score < bestScore) { bestScore = score; best = b; }
+    }
+    if (!best && dx) {
+      // wrap to the next / previous row in a wrapped grid
+      var idx = list.indexOf(cur) + (dx > 0 ? 1 : -1);
+      if (idx >= 0 && idx < list.length) { best = list[idx]; }
+    }
+    if (best) { best.focus(); }
+  }
+
+  document.addEventListener('keydown', function (e) {
+    var k = e.keyCode;
+
+    // Back: LG webOS 461, Tizen 10009, Android 4, Backspace 8, Esc 27
+    if (k === 461 || k === 10009 || k === 4 || k === 8 || k === 27) {
+      e.preventDefault();
+      goBack();
+      return;
+    }
+
+    if (state.screen === 'viewer' && v) {
+      showHud();
+      if (v.endShown) {
+        if (k === 37) { e.preventDefault(); moveFocus(-1, 0); }
+        else if (k === 39) { e.preventDefault(); moveFocus(1, 0); }
+        else if (k === 38 || k === 40) { e.preventDefault(); }
+        else if (k === 13 || k === 32) {            // OK / Select: click the focused button
+          e.preventDefault();
+          var focused = document.activeElement;
+          if (focused && focused.tagName === 'BUTTON') { focused.click(); }
+        }
+        return;
+      }
+      // next slide: → Enter Space PageDown Fast-forward
+      if (k === 39 || k === 13 || k === 32 || k === 34 || k === 417) { e.preventDefault(); nextSlide(); }
+      // previous slide: ← PageUp Rewind
+      else if (k === 37 || k === 33 || k === 412) { e.preventDefault(); prevSlide(); }
+      // channel up / down: next / previous set
+      else if (k === 427) { e.preventDefault(); openSet(v.setIdx + 1); }
+      else if (k === 428) { e.preventDefault(); openSet(v.setIdx - 1); }
+      else if (k === 38 || k === 40) { e.preventDefault(); }
+      return;
+    }
+
+    if (k === 37) { e.preventDefault(); moveFocus(-1, 0); }
+    else if (k === 39) { e.preventDefault(); moveFocus(1, 0); }
+    else if (k === 38) { e.preventDefault(); moveFocus(0, -1); }
+    else if (k === 40) { e.preventDefault(); moveFocus(0, 1); }
+    else if (k === 13 || k === 32) {                // OK / Select: click the focused button
+      var focused = document.activeElement;
+      if (focused && focused.tagName === 'BUTTON') { e.preventDefault(); focused.click(); }
+    }
+  });
+
+  // Magic Remote pointer: show controls on move, tap left/right side of the card to go back/forward
+  document.addEventListener('mousemove', function () { if (state.screen === 'viewer' && v && !v.endShown) { showHud(); } });
+  $('viewer').addEventListener('click', function (e) {
+    if (!v || v.endShown) { return; }
+    var t = e.target;
+    if (t && t.tagName === 'BUTTON') { return; }
+    if (e.clientX < window.innerWidth / 3) { prevSlide(); } else { nextSlide(); }
+    showHud();
+  });
+  var lastWheel = 0;
+  window.addEventListener('wheel', function (e) {
+    if (state.screen !== 'viewer' || !v || v.endShown) { return; }
+    var now = new Date().getTime();
+    if (now - lastWheel < 350) { return; }
+    lastWheel = now;
+    if (e.deltaY > 0) { nextSlide(); } else if (e.deltaY < 0) { prevSlide(); }
+  });
+
+  $('setsBack').onclick = function () { goBack(); };
+  $('viewBack').onclick = function (e) { e.stopPropagation(); goBack(); };
+  $('prevBtn').onclick = function (e) { e.stopPropagation(); prevSlide(); showHud(); };
+  $('nextBtn').onclick = function (e) { e.stopPropagation(); nextSlide(); showHud(); };
+  $('endLast').onclick = function () { hideEnd(); };
+  $('endReplay').onclick = function () { hideEnd(); showSlide(1); };
+  $('endNext').onclick = function () { openSet(v.setIdx + 1); };
+  $('endSets').onclick = function () { goBack(); };
+
+  /* ---------------- Keep the TV awake ---------------- */
+  // Two layers: the Screen Wake Lock API where the TV's browser supports it, plus a
+  // tiny silent looping video (TVs treat video playback as "in use" and skip the
+  // screen saver). Both are invisible.
+  var KEEP_AWAKE_WEBM = 'data:video/webm;base64,GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQJChYECGFOAZwEAAAAAAALCEU2bdLpNu4tTq4QVSalmU6yBoU27i1OrhBZUrmtTrIHYTbuMU6uEElTDZ1OsggEeTbuMU6uEHFO7a1OsggKs7AEAAAAAAABZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVSalmsirXsYMPQkBNgI1MYXZmNjAuMTYuMTAwV0GNTGF2ZjYwLjE2LjEwMESJiECfQAAAAAAAFlSua8GuAQAAAAAAADjXgQFzxYi1SNuFtjFPq5yBACK1nIN1bmSIgQCGhVZfVlA4g4EBI+ODhAvrwgDgibCBQLqBQJqBAhJUw2f8c3OgY8CAZ8iaRaOHRU5DT0RFUkSHjUxhdmY2MC4xNi4xMDBzc9ZjwItjxYi1SNuFtjFPq2fIoUWjh0VOQ09ERVJEh5RMYXZjNjAuMzEuMTAyIGxpYnZweGfIoUWjiERVUkFUSU9ORIeTMDA6MDA6MDIuMDAwMDAwMDAwAB9DtnVBB+eBAKOqgQAAgPACAJ0BKkAAQAAARwiFhYiFhIgCAgAGcDxCYAqyIPcwAP7/q1CAo5aBAMgA0QEABxDsABgAGFgv9AAIjoAAo5aBAZAA0QEABxDsABgAGFgv9AAIjoAAo5aBAlgA0QEABxDsABgAGFgv9AAIjoAAo5aBAyAA0QEABxDsABgAGFgv9AAIjoAAo5aBA+gA0QEABxDsABgAGFgv9AAIjoAAo5aBBLAA0QEABxDsABgAGFgv9AAIjoAAo5aBBXgA0QEABxAQFGAAYWC/0AAiOgAAo5aBBkAA0QEABxDsABgAGFgv9AAIjoAAo5aBBwgA0QEABxDsABgAGFgv9AAIjoAAHFO7a5G7j7OBALeK94EB8YIBn/CBAw==';
+  var KEEP_AWAKE_MP4 = 'data:video/mp4;base64,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';
+  var wakeLock = null;
+  var keepVideo = null;
+
+  function requestWakeLock() {
+    if (wakeLock || document.hidden) { return; }
+    if (!navigator.wakeLock || !navigator.wakeLock.request) { return; }
+    try {
+      navigator.wakeLock.request('screen').then(function (lock) {
+        wakeLock = lock;
+        lock.addEventListener('release', function () { wakeLock = null; });
+      }, function () {});
+    } catch (e) {}
+  }
+
+  function playKeepVideo() {
+    if (!keepVideo) {
+      keepVideo = document.createElement('video');
+      keepVideo.muted = true;
+      keepVideo.loop = true;
+      keepVideo.setAttribute('muted', '');
+      keepVideo.setAttribute('playsinline', '');
+      keepVideo.setAttribute('webkit-playsinline', '');
+      keepVideo.setAttribute('aria-hidden', 'true');
+      keepVideo.tabIndex = -1;
+      keepVideo.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;' +
+        'opacity:0.01;pointer-events:none;z-index:-1;';
+      var srcs = [['video/mp4', KEEP_AWAKE_MP4], ['video/webm', KEEP_AWAKE_WEBM]];
+      for (var i = 0; i < srcs.length; i++) {
+        var so = document.createElement('source');
+        so.type = srcs[i][0];
+        so.src = srcs[i][1];
+        keepVideo.appendChild(so);
+      }
+      document.body.appendChild(keepVideo);
+    }
+    if (keepVideo.paused) {
+      try {
+        var p = keepVideo.play();
+        if (p && p.catch) { p.catch(function () {}); }
+      } catch (e) {}
+    }
+  }
+
+  function keepAwake() { requestWakeLock(); playKeepVideo(); }
+
+  keepAwake();
+  // Autoplay can be blocked until the first remote press, so retry on input,
+  // when the app returns to the foreground, and every 20 seconds as a safety net.
+  document.addEventListener('keydown', keepAwake, true);
+  document.addEventListener('click', keepAwake, true);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) { keepAwake(); } });
+  setInterval(keepAwake, 20000);
+
+  /* ---------------- Full screen + landscape ---------------- */
+  // Browsers only allow full screen after a key press or tap, so this tries on the
+  // first input. If you exit full screen yourself it won't force you back in.
+  var fsExited = false;
+  var fsEntered = false;
+
+  function isFullscreen() {
+    return !!(document.fullscreenElement || document.webkitFullscreenElement ||
+              document.mozFullScreenElement || document.msFullscreenElement);
+  }
+
+  function lockLandscape() {
+    try {
+      var o = screen.orientation;
+      if (o && o.lock) {
+        var p = o.lock('landscape');
+        if (p && p.catch) { p.catch(function () {}); }
+      } else if (screen.lockOrientation) {
+        screen.lockOrientation('landscape');
+      } else if (screen.webkitLockOrientation) {
+        screen.webkitLockOrientation('landscape');
+      }
+    } catch (e) {}
+  }
+
+  function goFullscreen() {
+    if (fsExited || isFullscreen()) { return; }
+    var el = document.documentElement;
+    var req = el.requestFullscreen || el.webkitRequestFullscreen ||
+              el.mozRequestFullScreen || el.msRequestFullscreen;
+    if (!req) { lockLandscape(); return; }
+    try {
+      var p = req.call(el);
+      if (p && p.then) { p.then(lockLandscape, function () {}); } else { lockLandscape(); }
+    } catch (e) {}
+  }
+
+  function onFsChange() {
+    if (isFullscreen()) { fsEntered = true; lockLandscape(); }
+    else if (fsEntered) { fsExited = true; }   // the person left full screen on purpose
+  }
+  document.addEventListener('fullscreenchange', onFsChange);
+  document.addEventListener('webkitfullscreenchange', onFsChange);
+  document.addEventListener('mozfullscreenchange', onFsChange);
+  document.addEventListener('MSFullscreenChange', onFsChange);
+
+  goFullscreen();   // works right away when launched as an installed / TV app
+  lockLandscape();
+  document.addEventListener('keydown', goFullscreen, true);
+  document.addEventListener('click', goFullscreen, true);
+  document.addEventListener('touchend', goFullscreen, true);
+
+  /* ---------------- Start ---------------- */
+  loadAll(function (usedFallback, indexMissing) {
+    var note = '';
+    if (!topics.length) { note = 'No topics found. Check the "' + INDEX_TAB + '" tab in your Google Sheet.'; }
+    else if (usedFallback) { note = 'Could not read the Google Sheet, so a saved list of sets is shown.'; }
+    else if (indexMissing) { note = 'No "' + INDEX_TAB + '" tab found, so the built-in topic list is shown.'; }
+    $('menuNote').textContent = note;
+    route();
+    if (!topics.length) { showScreen('menu'); }
+  });
+})();
+</script>
+</body>
+</html>

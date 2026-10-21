@@ -81,6 +81,11 @@
     opacity: 0.7;
   }
   #menuNote { margin-top: 5vh; font-size: 1.6vw; color: #aaa; min-height: 2vw; }
+  #offlineBar { display: none; margin-top: 2vh; font-size: 1.6vw; color: #aaa; }
+  #offlineBar.show { display: block; }
+  #offlineBar.ok #offlineText { color: #7fd6a4; }
+  #offlineBar.warn #offlineText { color: #ff8a7a; }
+  #syncBtn { font-size: 1.5vw; padding: 1.2vh 1.6vw; margin-left: 1.2vw; vertical-align: middle; }
 
   /* Set picker */
   .bar { margin-bottom: 3vh; }
@@ -203,6 +208,7 @@
   <h1>Flashcards</h1>
   <div id="menuList"></div>
   <div id="menuNote">Loading flashcard sets…</div>
+  <div id="offlineBar"><span id="offlineText"></span><button class="btn" id="syncBtn" type="button" style="display:none"></button></div>
 </section>
 
 <section id="sets" class="screen">
@@ -250,6 +256,181 @@
   var SLIDE_PREFIX = 'slide-';
   var SLIDE_EXT = '.png';
   var MAX_SLIDES = 200;
+
+  /* ---------------- Offline support ---------------- */
+  // Slides are saved in Cache Storage (localStorage is far too small for them);
+  // sw.js serves them back when the TV has no connection. The topic list, set
+  // list and slide counts are small, so they live in localStorage.
+  // Names are per-app (sheet id + folder) so two apps on one site never mix data.
+  var NS = SHEET_ID.slice(0, 8);
+  var SCOPE = location.href.split('#')[0].split('?')[0].replace(/[^\/]*$/, '');
+  var SLIDES_CACHE = 'slides-v1|' + SCOPE;       // must match sw.js
+  var K_INDEX = NS + ':fcIndex';                 // topic tab names
+  var K_SETS = NS + ':fcSets';                   // topic id -> [{num, base}]
+  var K_COUNTS = NS + ':fcCounts';               // set base URL -> number of slides
+  var SYNC_CONCURRENCY = 4;                      // sets downloaded in parallel
+  var syncState = { running: false, done: 0, total: 0, failed: 0, error: '' };
+  var usageText = '';
+  var usedCache = false;                         // true when the topic list came from storage
+
+  function loadJSON(key) { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch (e) { return null; } }
+  function saveJSON(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {} }
+  var cachedSets = loadJSON(K_SETS) || {};
+  var counts = loadJSON(K_COUNTS) || {};
+
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function fetchWithTimeout(url, opts, ms) {
+    return new Promise(function (resolve, reject) {
+      var t = setTimeout(function () { reject(new Error('timeout')); }, ms);
+      fetch(url, opts).then(
+        function (r) { clearTimeout(t); resolve(r); },
+        function (e) { clearTimeout(t); reject(e); }
+      );
+    });
+  }
+
+  function offlineSupported() {
+    return !!(window.isSecureContext && window.caches && navigator.serviceWorker && window.Promise && window.fetch);
+  }
+  function registerSW() {
+    if (!('serviceWorker' in navigator)) { return; }
+    try { navigator.serviceWorker.register('sw.js').catch(function () {}); } catch (e) {}
+  }
+  function requestPersistence() {
+    try { if (navigator.storage && navigator.storage.persist) { navigator.storage.persist(); } } catch (e) {}
+  }
+  function refreshUsage() {
+    try {
+      if (navigator.storage && navigator.storage.estimate) {
+        return navigator.storage.estimate().then(function (est) {
+          if (est && est.usage) { usageText = ' · ~' + Math.round(est.usage / 1048576) + ' MB'; }
+        }, function () {});
+      }
+    } catch (e) {}
+    return Promise.resolve();
+  }
+
+  // Unique set base URLs for topics that pass `filterFn` (guessed fallback topics are never included).
+  function setBases(filterFn) {
+    var seen = {}, out = [];
+    topics.forEach(function (t) {
+      if (!filterFn(t)) { return; }
+      t.sets.forEach(function (s) {
+        if (!seen[s.base]) { seen[s.base] = true; out.push(s.base); }
+      });
+    });
+    return out;
+  }
+
+  function renderOfflineBar() {
+    var bar = $('offlineBar'), txt = $('offlineText'), btnEl = $('syncBtn');
+    var bases = setBases(function (t) { return t.fromSheet || t.fromCache; });
+    var saved = bases.filter(function (b) { return !!counts[b]; });
+    var slides = 0;
+    saved.forEach(function (b) { slides += counts[b]; });
+    var online = navigator.onLine !== false;
+    var msg = '', cls = '', btn = '';
+
+    if (!bases.length) {
+      msg = '';
+    } else if (!offlineSupported()) {
+      msg = window.isSecureContext ? 'Offline mode isn’t supported by this browser.' : 'Offline mode needs HTTPS.';
+      cls = 'warn';
+    } else if (syncState.running) {
+      msg = 'Saving for offline… ' + syncState.done + '/' + syncState.total + ' sets · ' + slides + ' slides';
+    } else if (syncState.error) {
+      msg = syncState.error; cls = 'warn'; btn = 'Retry';
+    } else if (saved.length === bases.length) {
+      msg = '✓ Available offline · ' + bases.length + ' sets · ' + slides + ' slides' + usageText;
+      cls = 'ok'; btn = 'Re-download';
+    } else {
+      msg = saved.length + '/' + bases.length + ' sets saved offline' + (syncState.failed ? ' · ' + syncState.failed + ' failed' : '');
+      cls = syncState.failed ? 'warn' : ''; btn = 'Download';
+    }
+
+    txt.textContent = msg;
+    bar.className = (msg ? 'show ' : '') + cls;
+    if (btn && online) {
+      btnEl.textContent = btn;
+      btnEl.setAttribute('data-force', btn === 'Re-download' ? '1' : '');
+      btnEl.style.display = '';
+    } else {
+      btnEl.style.display = 'none';
+    }
+  }
+
+  // Fetch one slide and store it. Resolves 'ok' or 'missing' (404 = end of set).
+  // Network errors / 5xx reject, so a dropped connection is never mistaken for the end.
+  function fetchAndStore(url, cache, force) {
+    function attempt(n) {
+      return fetchWithTimeout(url, { mode: 'cors', credentials: 'omit', cache: force ? 'reload' : 'default' }, 20000)
+        .then(function (res) {
+          if (res.status === 404) { return 'missing'; }
+          if (res.ok) { return cache.put(url, res).then(function () { return 'ok'; }); }
+          throw new Error('HTTP ' + res.status);
+        })
+        .catch(function (e) {
+          if ((e && e.name === 'QuotaExceededError') || n >= 2) { throw e; }
+          return sleep(800 * (n + 1)).then(function () { return attempt(n + 1); });
+        });
+    }
+    var start = force ? Promise.resolve(null) : cache.match(url, { ignoreVary: true });
+    return start.then(function (hit) { return hit ? 'ok' : attempt(0); });
+  }
+
+  function downloadSet(base, cache, force) {
+    var n = 0;
+    function next() {
+      n++;
+      if (n > MAX_SLIDES) { return Promise.resolve(n - 1); }
+      var url = base + '/' + SLIDE_PREFIX + pad(n) + SLIDE_EXT;
+      return fetchAndStore(url, cache, force).then(function (r) {
+        return r === 'missing' ? n - 1 : next();
+      });
+    }
+    return next().then(function (count) {
+      if (count > 0) { counts[base] = count; saveJSON(K_COUNTS, counts); }   // empty folders are retried next launch
+    });
+  }
+
+  function syncAll(force) {
+    if (syncState.running) { return; }
+    if (!offlineSupported() || navigator.onLine === false) { renderOfflineBar(); return; }
+
+    var bases = setBases(function (t) { return t.fromSheet; });
+    var pending = bases.filter(function (b) { return force || !counts[b]; });
+    if (!pending.length) { refreshUsage().then(renderOfflineBar); return; }
+
+    syncState.running = true; syncState.error = '';
+    syncState.done = 0; syncState.failed = 0; syncState.total = pending.length;
+    renderOfflineBar();
+
+    caches.open(SLIDES_CACHE).then(function (cache) {
+      var queue = pending.slice();
+      function worker() {
+        if (!queue.length || syncState.error) { return Promise.resolve(); }
+        var b = queue.shift();
+        return downloadSet(b, cache, force).catch(function (e) {
+          if (e && e.name === 'QuotaExceededError') { syncState.error = 'Storage is full — free some space on the TV.'; }
+          else { syncState.failed++; }
+        }).then(function () {
+          syncState.done++;
+          renderOfflineBar();
+          return worker();
+        });
+      }
+      var ws = [];
+      for (var i = 0; i < SYNC_CONCURRENCY; i++) { ws.push(worker()); }
+      return Promise.all(ws);
+    }, function () {
+      syncState.error = 'Storage unavailable in this browser.';
+    }).then(function () {
+      syncState.running = false;
+      return refreshUsage();
+    }).then(renderOfflineBar);
+  }
+
+  $('syncBtn').onclick = function () { syncAll($('syncBtn').getAttribute('data-force') === '1'); };
 
   /* ---------------- Helpers ---------------- */
   function $(id) { return document.getElementById(id); }
@@ -365,7 +546,12 @@
       fetchSheet(id, function (resp) {
         var sets = parseSets(resp);
         var fromSheet = sets.length > 0;
-        if (!fromSheet) {
+        var fromCache = false;
+        if (fromSheet) { cachedSets[id] = sets; saveJSON(K_SETS, cachedSets); }
+        else if (!resp && cachedSets[id] && cachedSets[id].length) {   // offline: use the saved sets
+          sets = cachedSets[id]; fromCache = true; usedCache = true;
+        }
+        if (!fromSheet && !fromCache) {
           // Only tabs from the built-in list get the GitHub fallback; an unknown
           // or empty tab from the index is skipped rather than shown broken.
           if (!fromIndex || TOPICS.indexOf(id) >= 0) {
@@ -375,7 +561,7 @@
             sets = null;
           }
         }
-        if (sets) { loaded[idx] = { id: id, title: pretty(id), sets: sets, fromSheet: fromSheet }; }
+        if (sets) { loaded[idx] = { id: id, title: pretty(id), sets: sets, fromSheet: fromSheet, fromCache: fromCache }; }
         remaining--;
         if (remaining === 0) {
           topics = loaded.filter(function (t) { return !!t; });
@@ -386,9 +572,15 @@
   }
 
   function loadAll(done) {
+    usedCache = false;
     fetchSheet(INDEX_TAB, function (resp) {
       var ids = parseIndex(resp);
       var fromIndex = ids.length > 0;
+      if (fromIndex) { saveJSON(K_INDEX, ids); }
+      else if (!resp) {                               // sheet unreachable (offline): use the saved topic list
+        var savedIds = loadJSON(K_INDEX);
+        if (savedIds && savedIds.length) { ids = savedIds; fromIndex = true; }
+      }
       if (!fromIndex) { ids = TOPICS.slice(); }
       loadTopics(ids, fromIndex, done);
     }, 0);
@@ -498,7 +690,9 @@
     showHud();
     v.i = 0;
     updateCount();
-    probe(1, v.token);
+    var known = counts[set.base];
+    if (known) { v.count = known; updateCount(); }   // saved for offline: count is already known
+    else { probe(1, v.token); }
     showSlide(idx || 1);
   }
 
@@ -847,15 +1041,26 @@
   document.addEventListener('touchend', goFullscreen, true);
 
   /* ---------------- Start ---------------- */
-  loadAll(function (usedFallback, indexMissing) {
+  function onLoaded(usedFallback, indexMissing) {
     var note = '';
     if (!topics.length) { note = 'No topics found. Check the "' + INDEX_TAB + '" tab in your Google Sheet.'; }
+    else if (usedCache) { note = 'Offline — showing saved flashcard sets.'; }
     else if (usedFallback) { note = 'Could not read the Google Sheet, so a saved list of sets is shown.'; }
     else if (indexMissing) { note = 'No "' + INDEX_TAB + '" tab found, so the built-in topic list is shown.'; }
     $('menuNote').textContent = note;
     route();
     if (!topics.length) { showScreen('menu'); }
+    syncAll(false);
+  }
+  registerSW();
+  requestPersistence();
+  loadAll(onLoaded);
+  window.addEventListener('online', function () {
+    loadAll(function (fb, im) {
+      if (state.screen === 'menu') { onLoaded(fb, im); } else { syncAll(false); }
+    });
   });
+  window.addEventListener('offline', renderOfflineBar);
 })();
 </script>
 </body>
